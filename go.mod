@@ -11,9 +11,8 @@ go 1.24.0
 replace github.com/BV-BRC/BV-BRC-Go-SDK => ../BV-BRC-Go-SDK-sra-prereqs
 
 require (
-	// Not yet imported by any package in this phase -- see the replace
-	// comment above. Phase 4's internal/metadata will import
-	// BV-BRC-Go-SDK/sra directly.
+	// Imported by internal/metadata (Phase 4), via the BV-BRC-Go-SDK/sra
+	// package -- see the replace comment above.
 	github.com/BV-BRC/BV-BRC-Go-SDK v0.0.0-20260902193530-3defe848dae6
 	github.com/spf13/pflag v1.0.5
 	// Not yet imported by any package -- Phase 5's internal/catalog is the

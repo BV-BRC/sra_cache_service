@@ -1,0 +1,26 @@
+[%# Workspace/service/process.Workspace.tt writes this as unbracketed literal
+    text ("set log_dir = ...") rather than a real Template Toolkit directive,
+    so its `log_dir` is never actually bound and every check process stanza
+    in that file renders "with pidfile /service.pid" regardless of
+    kb_service_log_dir -- verified directly by rendering it with tpage both
+    with and without --define kb_service_log_dir=...; both come out
+    "/service.pid". That is a real, pre-existing bug worth fixing here
+    rather than copying: use TT's actual assignment syntax so log_dir is a
+    real template variable. -%]
+[% IF kb_service_log_dir -%]
+[% log_dir = kb_service_log_dir -%]
+[% ELSE -%]
+[% log_dir = "${kb_top}/services/${kb_service_name}" -%]
+[% END -%]
+
+check process [% kb_service_name %] with pidfile [% log_dir %]/service.pid
+  start program = "[% kb_top %]/services/[% kb_service_name %]/start_service" with timeout 60 seconds
+  stop  program = "[% kb_top %]/services/[% kb_service_name %]/stop_service"
+  if failed port [% kb_service_port %] type tcp
+     with timeout 15 seconds
+     then restart
+  if failed port [% kb_data_service_port %] type tcp
+     with timeout 15 seconds
+     then restart
+  if 3 restarts within 5 cycles then timeout
+  group [% kb_service_name %]_group
