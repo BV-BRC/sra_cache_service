@@ -25,8 +25,11 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/BV-BRC/BV-BRC-Go-SDK/sra"
 	"github.com/BV-BRC/sra_cache_service/internal/config"
 	"github.com/BV-BRC/sra_cache_service/internal/jsonrpc"
+	"github.com/BV-BRC/sra_cache_service/internal/metadata"
+	"github.com/BV-BRC/sra_cache_service/internal/rpcapi"
 )
 
 // version is stamped at build time with -X main.version=... A future phase
@@ -115,8 +118,14 @@ func main() {
 	// "a valid token was presented" is unreachable.
 	rpcServer := jsonrpc.NewServer(NoopValidator{}, log)
 
-	// No RPC methods registered yet -- Phase 4 adds SRACache.get_metadata;
-	// Phases 6/7 add start_precache / precache_status / get_sra_data.
+	// Phase 4: SRACache.get_metadata. Stateless -- sra.New() is all the
+	// setup it needs, constructed the same way BV-BRC-Go-SDK/sra's own
+	// tests do; it defaults its NCBI API key from $NCBI_API_KEY and its
+	// User-Agent from BV-BRC-Go-SDK/version. Phases 6/7 register
+	// start_precache / precache_status / get_sra_data here, once the
+	// catalog/cache/fetcher pieces those need exist.
+	svc := &rpcapi.Service{Metadata: metadata.New(sra.New())}
+	svc.RegisterGetMetadata(rpcServer)
 
 	// The data-plane listener serves nothing yet (Phase 7 adds
 	// /sra/{key}/{accession}.sra); it exists at this phase purely to prove
