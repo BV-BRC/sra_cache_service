@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -26,9 +27,13 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/BV-BRC/BV-BRC-Go-SDK/sra"
+	"github.com/BV-BRC/sra_cache_service/internal/cache"
+	"github.com/BV-BRC/sra_cache_service/internal/catalog"
 	"github.com/BV-BRC/sra_cache_service/internal/config"
+	"github.com/BV-BRC/sra_cache_service/internal/fetcher"
 	"github.com/BV-BRC/sra_cache_service/internal/jsonrpc"
 	"github.com/BV-BRC/sra_cache_service/internal/metadata"
+	"github.com/BV-BRC/sra_cache_service/internal/ratelimit"
 	"github.com/BV-BRC/sra_cache_service/internal/rpcapi"
 )
 
@@ -118,14 +123,72 @@ func main() {
 	// "a valid token was presented" is unreachable.
 	rpcServer := jsonrpc.NewServer(NoopValidator{}, log)
 
+	// Phase 5/6: catalog (sqlite) + on-disk cache + fetcher/pool. Both
+	// cache-root and the catalog db's parent directory are created here if
+	// missing -- matching Phase 1's "permissive about first-run state"
+	// philosophy (internal/config's doc comment): a fresh deploy shouldn't
+	// need an operator to pre-create either path by hand.
+	if err := os.MkdirAll(cfg.CacheRoot, 0o755); err != nil {
+		fatal(log, "creating cache root", "path", cfg.CacheRoot, "err", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.CatalogDB), 0o755); err != nil {
+		fatal(log, "creating catalog db directory", "path", filepath.Dir(cfg.CatalogDB), "err", err)
+	}
+
+	cat, err := catalog.Open(ctx, cfg.CatalogDB)
+	if err != nil {
+		fatal(log, "opening catalog", "path", cfg.CatalogDB, "err", err)
+	}
+	defer cat.Close()
+
+	cch := cache.New(cfg.CacheRoot)
+
+	// stagingDir lives under cache-root (not a separate config key) so
+	// operators only have one local-SSD path to provision for this
+	// service; internal/fetcher.New creates it if missing.
+	stagingDir := filepath.Join(cfg.CacheRoot, "staging")
+	fch, err := fetcher.New(cfg.PrefetchBin, stagingDir)
+	if err != nil {
+		fatal(log, "constructing fetcher", "prefetch_bin", cfg.PrefetchBin, "staging_dir", stagingDir, "err", err)
+	}
+	// Probe logs a loud warning (not a fatal error) if prefetch itself is
+	// unusable or the account has no SRA Toolkit user-settings.mkfg -- the
+	// service still starts either way (see Probe's doc comment).
+	if err := fch.Probe(ctx, log); err != nil {
+		log.Warn("prefetch probe failed; start_precache will fail on every accession until this is fixed",
+			"prefetch_bin", cfg.PrefetchBin, "err", err)
+	}
+
+	limiter := ratelimit.New(cfg.InitialConcurrentPrefetch, cfg.MaxConcurrentPrefetch)
+	pool := fetcher.NewPool(cat, cch, fch, limiter, cfg.MaxCacheSize, log)
+
 	// Phase 4: SRACache.get_metadata. Stateless -- sra.New() is all the
 	// setup it needs, constructed the same way BV-BRC-Go-SDK/sra's own
 	// tests do; it defaults its NCBI API key from $NCBI_API_KEY and its
-	// User-Agent from BV-BRC-Go-SDK/version. Phases 6/7 register
-	// start_precache / precache_status / get_sra_data here, once the
-	// catalog/cache/fetcher pieces those need exist.
-	svc := &rpcapi.Service{Metadata: metadata.New(sra.New())}
+	// User-Agent from BV-BRC-Go-SDK/version.
+	svc := &rpcapi.Service{
+		Metadata: metadata.New(sra.New()),
+		Catalog:  cat,
+		Pool:     pool,
+	}
 	svc.RegisterGetMetadata(rpcServer)
+	svc.RegisterStartPrecache(rpcServer)
+	svc.RegisterPrecacheStatus(rpcServer)
+
+	// The pool runs for the lifetime of the process, stopping only when ctx
+	// is cancelled (the same signal.NotifyContext-derived context the two
+	// HTTP servers' Shutdown calls below use) -- no separate shutdown
+	// mechanism. It is added to the same WaitGroup those two Shutdown
+	// goroutines use further down, so the final wg.Wait() blocks on all
+	// three.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := pool.Run(ctx); err != nil {
+			log.Error("prefetch pool stopped with an error", "err", err)
+		}
+	}()
 
 	// The data-plane listener serves nothing yet (Phase 7 adds
 	// /sra/{key}/{accession}.sra); it exists at this phase purely to prove
@@ -183,7 +246,9 @@ func main() {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var wg sync.WaitGroup
+	// wg already has the pool's Run goroutine registered (Add(1) above);
+	// this Add(2) covers the two HTTP servers' Shutdown calls below, so the
+	// eventual wg.Wait() blocks on all three.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
