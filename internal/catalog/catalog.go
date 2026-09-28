@@ -383,6 +383,57 @@ func (c *Catalog) EvictionCandidates(ctx context.Context, now time.Time) ([]Entr
 	return out, nil
 }
 
+// ListByState returns up to limit rows in state, ordered by queued_time
+// ascending (oldest first, i.e. FIFO) -- Phase 6's internal/fetcher.Pool
+// uses this to drain catalog.StateQueued rows without loading the whole
+// table into memory at once. limit <= 0 means "no rows" (matching how a
+// caller that computed a non-positive batch size almost certainly meant
+// "nothing right now", not "everything").
+func (c *Catalog) ListByState(ctx context.Context, state State, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT `+selectColumns+` FROM accessions
+		WHERE state = ?
+		ORDER BY queued_time ASC
+		LIMIT ?
+	`, string(state), limit)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list by state %s: %w", state, err)
+	}
+	defer rows.Close()
+
+	var out []Entry
+	for rows.Next() {
+		e, err := scanEntry(rows)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: list by state %s: scanning: %w", state, err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: list by state %s: %w", state, err)
+	}
+	return out, nil
+}
+
+// SetSizeBytes updates accession's recorded size_bytes. Split out from
+// SetState because the size only becomes known as cache.Cache.Publish's
+// return value -- after a successful fetch -- while SetState's StateCached
+// branch only ever receives a message string; a caller publishing a fetched
+// file calls this alongside SetState(accession, StateCached, ...), not
+// instead of it. Returns ErrNotFound if accession has no row.
+func (c *Catalog) SetSizeBytes(ctx context.Context, accession string, sizeBytes int64) error {
+	res, err := c.db.ExecContext(ctx,
+		`UPDATE accessions SET size_bytes = ? WHERE accession = ?`,
+		sizeBytes, accession)
+	if err != nil {
+		return fmt.Errorf("catalog: set size bytes %s: %w", accession, err)
+	}
+	return checkAffected(res, accession)
+}
+
 // Requeue is restart recovery: any row stuck in_progress (the process that
 // was fetching it died mid-fetch) moves back to queued. There is no
 // in-flight work to resume, only state to reset -- rows in any other state

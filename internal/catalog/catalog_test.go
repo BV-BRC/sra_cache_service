@@ -332,6 +332,83 @@ func TestRequeueRestartRecovery(t *testing.T) {
 	}
 }
 
+// TestListByStateFIFOOrderAndFilter asserts ListByState returns only rows
+// in the requested state, oldest queued_time first, and respects limit.
+func TestListByStateFIFOOrderAndFilter(t *testing.T) {
+	ctx := context.Background()
+	cat := openTest(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	seed := []Entry{
+		{Accession: "SRR3", State: StateQueued, QueuedTime: base.Add(3 * time.Minute)},
+		{Accession: "SRR1", State: StateQueued, QueuedTime: base.Add(1 * time.Minute)},
+		{Accession: "SRR2", State: StateQueued, QueuedTime: base.Add(2 * time.Minute)},
+		{Accession: "CACHED1", State: StateCached, QueuedTime: base},
+	}
+	for _, e := range seed {
+		if err := cat.Upsert(ctx, e); err != nil {
+			t.Fatalf("Upsert %s: %v", e.Accession, err)
+		}
+	}
+
+	got, err := cat.ListByState(ctx, StateQueued, 10)
+	if err != nil {
+		t.Fatalf("ListByState: %v", err)
+	}
+	var order []string
+	for _, e := range got {
+		order = append(order, e.Accession)
+	}
+	want := []string{"SRR1", "SRR2", "SRR3"}
+	if len(order) != len(want) {
+		t.Fatalf("ListByState order = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Errorf("ListByState[%d] = %q, want %q (full order %v)", i, order[i], want[i], order)
+		}
+	}
+
+	limited, err := cat.ListByState(ctx, StateQueued, 2)
+	if err != nil {
+		t.Fatalf("ListByState (limit 2): %v", err)
+	}
+	if len(limited) != 2 || limited[0].Accession != "SRR1" || limited[1].Accession != "SRR2" {
+		t.Fatalf("ListByState (limit 2) = %v, want [SRR1 SRR2]", limited)
+	}
+
+	none, err := cat.ListByState(ctx, StateQueued, 0)
+	if err != nil {
+		t.Fatalf("ListByState (limit 0): %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("ListByState (limit 0) = %v, want empty", none)
+	}
+}
+
+func TestSetSizeBytes(t *testing.T) {
+	ctx := context.Background()
+	cat := openTest(t)
+
+	if err := cat.Enqueue(ctx, "SRR1"); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := cat.SetSizeBytes(ctx, "SRR1", 123456); err != nil {
+		t.Fatalf("SetSizeBytes: %v", err)
+	}
+	e, ok, err := cat.Get(ctx, "SRR1")
+	if err != nil || !ok {
+		t.Fatalf("Get: ok=%v err=%v", ok, err)
+	}
+	if e.SizeBytes != 123456 {
+		t.Errorf("SizeBytes = %d, want 123456", e.SizeBytes)
+	}
+
+	if err := cat.SetSizeBytes(ctx, "SRR_NOPE", 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetSizeBytes on unknown accession: err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCatalogDelete(t *testing.T) {
 	ctx := context.Background()
 	cat := openTest(t)
