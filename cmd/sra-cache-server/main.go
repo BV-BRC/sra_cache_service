@@ -30,6 +30,7 @@ import (
 	"github.com/BV-BRC/sra_cache_service/internal/cache"
 	"github.com/BV-BRC/sra_cache_service/internal/catalog"
 	"github.com/BV-BRC/sra_cache_service/internal/config"
+	"github.com/BV-BRC/sra_cache_service/internal/dataplane"
 	"github.com/BV-BRC/sra_cache_service/internal/fetcher"
 	"github.com/BV-BRC/sra_cache_service/internal/jsonrpc"
 	"github.com/BV-BRC/sra_cache_service/internal/metadata"
@@ -162,18 +163,35 @@ func main() {
 	limiter := ratelimit.New(cfg.InitialConcurrentPrefetch, cfg.MaxConcurrentPrefetch)
 	pool := fetcher.NewPool(cat, cch, fch, limiter, cfg.MaxCacheSize, log)
 
+	// Phase 7: the signer backing get_sra_data and the data-plane HTTP
+	// handler. Built unconditionally even with an empty DownloadSecret/
+	// DataPlaneBaseURL -- dataplane.Signer itself is what refuses to
+	// mint/verify in that case (ErrEmptySecret), loudly and per-call, rather
+	// than this package guessing at whether that's fatal. Refusing to start
+	// the whole service over an empty secret is explicitly Phase 10's job.
+	signer := dataplane.New(cfg.DownloadSecret, cfg.DataPlaneBaseURL)
+	if cfg.DownloadSecret == "" {
+		log.Warn("download-secret is empty; get_sra_data will mint no usable URLs until this is configured")
+	}
+	if cfg.DataPlaneBaseURL == "" {
+		log.Warn("data-plane-base-url is empty; get_sra_data will mint no usable URLs until this is configured")
+	}
+
 	// Phase 4: SRACache.get_metadata. Stateless -- sra.New() is all the
 	// setup it needs, constructed the same way BV-BRC-Go-SDK/sra's own
 	// tests do; it defaults its NCBI API key from $NCBI_API_KEY and its
 	// User-Agent from BV-BRC-Go-SDK/version.
 	svc := &rpcapi.Service{
-		Metadata: metadata.New(sra.New()),
-		Catalog:  cat,
-		Pool:     pool,
+		Metadata:         metadata.New(sra.New()),
+		Catalog:          cat,
+		Pool:             pool,
+		Signer:           signer,
+		DownloadLifetime: cfg.DownloadLifetime,
 	}
 	svc.RegisterGetMetadata(rpcServer)
 	svc.RegisterStartPrecache(rpcServer)
 	svc.RegisterPrecacheStatus(rpcServer)
+	svc.RegisterGetSRAData(rpcServer)
 
 	// The pool runs for the lifetime of the process, stopping only when ctx
 	// is cancelled (the same signal.NotifyContext-derived context the two
@@ -190,11 +208,17 @@ func main() {
 		}
 	}()
 
-	// The data-plane listener serves nothing yet (Phase 7 adds
-	// /sra/{key}/{accession}.sra); it exists at this phase purely to prove
-	// the dual-server/dual-port startup and shutdown plumbing that later
-	// phases build on.
+	// Phase 7: the data-plane listener now actually serves cached .sra bytes
+	// at /sra/{key}/{accession}.sra, wrapped in AccessLog for the
+	// ttfb/total-transfer-time instrumentation (see internal/dataplane's doc
+	// comment on why that split matters -- it's the direct lesson from a
+	// real Workspace download-stall investigation). cch.Path and cat's
+	// TouchAccess are passed directly: *cache.Cache.Path already has
+	// dataplane.PathResolver's exact signature, and *catalog.Catalog
+	// satisfies dataplane.AccessToucher as-is.
 	dataMux := http.NewServeMux()
+	dpHandler := dataplane.NewHandler(signer, cch.Path, cat, log)
+	dataMux.Handle("/sra/", dataplane.AccessLog(log, dpHandler))
 
 	mainSrv := &http.Server{
 		Addr: *listen,
