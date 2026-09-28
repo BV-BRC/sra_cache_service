@@ -14,7 +14,7 @@ require (
 	// Imported by internal/metadata (Phase 4), via the BV-BRC-Go-SDK/sra
 	// package -- see the replace comment above.
 	github.com/BV-BRC/BV-BRC-Go-SDK v0.0.0-20260902193530-3defe848dae6
-	github.com/spf13/pflag v1.0.5
+	github.com/spf13/pflag v1.0.9
 	// Not yet imported by any package -- Phase 5's internal/catalog is the
 	// first real user. Pulled in now so go.sum is settled ahead of that
 	// phase, per the implementation plan.
@@ -27,8 +27,11 @@ require (
 // module imports it itself.
 require github.com/dustin/go-humanize v1.0.1
 
+require github.com/spf13/cobra v1.10.2
+
 require (
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

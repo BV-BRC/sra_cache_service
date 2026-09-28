@@ -13,6 +13,7 @@ GOFLAGS ?=
 
 BIN_LOCAL = bin
 SERVER_BIN = $(BIN_LOCAL)/sra-cache-server
+PRECACHE_CLIENT_BIN = $(BIN_LOCAL)/p3-sra-precache
 
 # --- Deployment (Phase 3) config ---
 # Same TARGET/DEPLOY_TARGET/DEPLOY_RUNTIME convention as Workspace/Makefile:
@@ -44,15 +45,19 @@ TPAGE_ARGS = \
 	$(TPAGE_TEMPDIR) \
 	$(TPAGE_SERVICE_LOGDIR)
 
-# Phase 1: build only the server binary and prove the JSONRPC client
-# generation path. The CLI tools (Phases 8/9) are later phases.
+# Phase 1 built only the server binary and proved the JSONRPC client
+# generation path. Phase 8 adds the first client CLI, p3-sra-precache;
+# p3-sra-dump is Phase 9, still to come.
 
-all: $(SERVER_BIN)
+all: $(SERVER_BIN) $(PRECACHE_CLIENT_BIN)
 
 $(SERVER_BIN): $(shell find cmd internal -name '*.go') go.mod
 	CGO_ENABLED=0 GOFLAGS=$(GOFLAGS) $(GO) build -buildvcs=false -o $(SERVER_BIN) ./cmd/sra-cache-server
 
-build: $(SERVER_BIN)
+$(PRECACHE_CLIENT_BIN): $(shell find cmd internal -name '*.go') go.mod
+	CGO_ENABLED=0 GOFLAGS=$(GOFLAGS) $(GO) build -buildvcs=false -o $(PRECACHE_CLIENT_BIN) ./cmd/p3-sra-precache
+
+build: $(SERVER_BIN) $(PRECACHE_CLIENT_BIN)
 
 test:
 	CGO_ENABLED=0 $(GO) test -buildvcs=false ./...
@@ -99,14 +104,15 @@ clean:
 # --config/$KB_DEPLOYMENT_CONFIG themselves).
 deploy: deploy-client deploy-service
 
-# No client CLI binaries exist yet -- p3-sra-precache and p3-sra-dump are
-# Phases 8-9 of PLAN-sra-cache-service-implementation.md. When they exist
-# this target's job is only `install` into $(TARGET)/bin (or wherever the
-# convention for a standalone Go CLI in this tree turns out to be) -- do NOT
-# add a wrap_*.sh step here: these are static binaries, not
-# scripts/*.pl|py|sh needing KB_TOP/PERL5LIB/etc injected around them.
+# Phase 8 adds the first client CLI, p3-sra-precache, installed straight
+# into $(TARGET)/bin like every other dev_container binary -- p3-sra-dump
+# (Phase 9) lands here the same way once it exists. Deliberately no
+# wrap_*.sh step: these are static binaries, not scripts/*.pl|py|sh needing
+# KB_TOP/PERL5LIB/etc injected around them (see this Makefile's "Deployment
+# (Phase 3)" comment above).
 deploy-client:
-	@echo "deploy-client: no client CLI binaries exist yet (p3-sra-precache / p3-sra-dump are Phases 8-9 of PLAN-sra-cache-service-implementation.md) -- nothing to deploy"
+	if [ ! -d $(TARGET)/bin ] ; then mkdir -p $(TARGET)/bin ; fi
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=$(GOFLAGS) $(GO) build -buildvcs=false -o $(TARGET)/bin/p3-sra-precache ./cmd/p3-sra-precache
 
 deploy-dir:
 	if [ ! -d $(TARGET)/services/$(SERVICE) ] ; then mkdir -p $(TARGET)/services/$(SERVICE) ; fi
