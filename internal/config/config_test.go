@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeTestINI(t *testing.T, contents string) string {
@@ -189,5 +190,88 @@ func TestLoadConcurrencyUnparseableFailsClearly(t *testing.T) {
 				t.Fatalf("Load: expected an error for %s = many, got nil", key)
 			}
 		})
+	}
+}
+
+// TestLoadPhase7DefaultsApplyWhenKeysAbsent: an empty download-secret and
+// data-plane-base-url are tolerated at load time (Phase 10 is what refuses
+// to start the service over an empty secret, not this package), and
+// download-lifetime falls back to DefaultDownloadLifetime.
+func TestLoadPhase7DefaultsApplyWhenKeysAbsent(t *testing.T) {
+	path := writeTestINI(t, `
+[SRACache]
+listen = :7141
+`)
+
+	cfg, err := Load(path, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DownloadSecret != "" {
+		t.Errorf("DownloadSecret = %q, want empty", cfg.DownloadSecret)
+	}
+	if cfg.DataPlaneBaseURL != "" {
+		t.Errorf("DataPlaneBaseURL = %q, want empty", cfg.DataPlaneBaseURL)
+	}
+	if cfg.DownloadLifetime != DefaultDownloadLifetime {
+		t.Errorf("DownloadLifetime = %v, want default %v", cfg.DownloadLifetime, DefaultDownloadLifetime)
+	}
+}
+
+// TestLoadPhase7ExplicitValues asserts explicit values are read through,
+// including download-lifetime's plain-integer-seconds parsing.
+func TestLoadPhase7ExplicitValues(t *testing.T) {
+	path := writeTestINI(t, `
+[SRACache]
+listen = :7141
+download-secret = super-secret-hmac-key
+data-plane-base-url = http://sra-cache.example.org:7142
+download-lifetime = 900
+`)
+
+	cfg, err := Load(path, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DownloadSecret != "super-secret-hmac-key" {
+		t.Errorf("DownloadSecret = %q", cfg.DownloadSecret)
+	}
+	if cfg.DataPlaneBaseURL != "http://sra-cache.example.org:7142" {
+		t.Errorf("DataPlaneBaseURL = %q", cfg.DataPlaneBaseURL)
+	}
+	if cfg.DownloadLifetime != 900*time.Second {
+		t.Errorf("DownloadLifetime = %v, want 900s", cfg.DownloadLifetime)
+	}
+}
+
+// TestLoadDownloadLifetimeFalsyFallsBackToDefault matches wsconfig.go's own
+// "0 means absent" handling for the same key name.
+func TestLoadDownloadLifetimeFalsyFallsBackToDefault(t *testing.T) {
+	path := writeTestINI(t, `
+[SRACache]
+listen = :7141
+download-lifetime = 0
+`)
+
+	cfg, err := Load(path, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DownloadLifetime != DefaultDownloadLifetime {
+		t.Errorf("DownloadLifetime = %v, want default %v for a falsy 0", cfg.DownloadLifetime, DefaultDownloadLifetime)
+	}
+}
+
+// TestLoadDownloadLifetimeUnparseableFailsClearly matches the
+// never-silently-coerce requirement the other integer keys already have.
+func TestLoadDownloadLifetimeUnparseableFailsClearly(t *testing.T) {
+	path := writeTestINI(t, `
+[SRACache]
+listen = :7141
+download-lifetime = banana
+`)
+
+	if _, err := Load(path, ""); err == nil {
+		t.Fatal("Load: expected an error for download-lifetime = banana, got nil")
 	}
 }

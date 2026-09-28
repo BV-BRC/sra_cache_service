@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dustin/go-humanize"
 )
@@ -58,6 +59,16 @@ const (
 	// max-concurrent-prefetch is unset.
 	DefaultMaxConcurrentPrefetch = 16
 )
+
+// DefaultDownloadLifetime is the fallback applied when download-lifetime is
+// absent, empty, or 0 -- matching the "falsy means absent" convention
+// Workspace/go/internal/wsconfig.go already uses for the same key name in a
+// sibling service. An hour is also that package's DefaultDownloadLifetime;
+// reusing the same number is not load-bearing (the two services' signed
+// URLs are independent), just a reasonable, already-precedented starting
+// point for how long a caller has to actually fetch a cached .sra file
+// before its pin lease (see internal/dataplane/signer.go) expires.
+const DefaultDownloadLifetime = time.Hour
 
 // Config holds the deployment settings this service reads out of its
 // section of the deployment INI. Phase 7/10 add
@@ -103,6 +114,39 @@ type Config struct {
 	// the adaptive controller can never exceed this, though it may run
 	// below it.
 	MaxConcurrentPrefetch int
+
+	// DownloadSecret is the HMAC key internal/dataplane.Signer uses to mint
+	// and verify signed data-plane URLs. Empty is tolerated at config-load
+	// time -- Load never fails on it -- but internal/dataplane.NewSigner
+	// refuses to mint or verify anything with an empty secret (a guessable
+	// or absent signing key would make the whole cache publicly readable).
+	// Refusing to *start the service* on an empty secret is explicitly
+	// Phase 10's job (PLAN-sra-cache-service-implementation.md, Phase 7's
+	// intro), not this package's.
+	DownloadSecret string
+
+	// DownloadLifetime is how long a URL minted by get_sra_data stays
+	// valid, which -- per PLAN-sra-precache-service.md section 3 -- is also
+	// the accession's cache-eviction pin lease: there is no separate
+	// refcount protocol. Parsed from download-lifetime as a plain integer
+	// number of seconds (the same convention
+	// Workspace/go/internal/wsconfig.go already uses for a key of the same
+	// name), not a Go duration string -- nothing in this codebase's configs
+	// uses "1h30m"-style values. Falls back to DefaultDownloadLifetime when
+	// absent, empty, or 0.
+	DownloadLifetime time.Duration
+
+	// DataPlaneBaseURL is the externally visible base URL a minted signed
+	// URL is built against, e.g. "http://sra-cache.example.org:7142".
+	// Deliberately NOT inferred from DataListen (which is only a bind
+	// address, e.g. ":7142" or "127.0.0.1:7142") -- a real deployment may
+	// sit behind a reverse proxy or load balancer whose externally-visible
+	// host/port differs from whatever this process itself binds to, the
+	// same reason Workspace's download service takes its own
+	// "download-url-base" rather than deriving one. Left empty if unset;
+	// internal/rpcapi.Service.getSRAData is what actually requires it to be
+	// set (it cannot mint a usable URL otherwise), not this package.
+	DataPlaneBaseURL string
 
 	// Raw holds every key/value pair read from the section, so a later
 	// phase can start consuming a new deploy.cfg key without changing
@@ -171,6 +215,23 @@ func Load(path, section string) (*Config, error) {
 	cfg.MaxConcurrentPrefetch, err = intOrDefault(vals, "max-concurrent-prefetch", DefaultMaxConcurrentPrefetch)
 	if err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
+	}
+
+	cfg.DownloadSecret = vals["download-secret"]
+	cfg.DataPlaneBaseURL = vals["data-plane-base-url"]
+
+	cfg.DownloadLifetime = DefaultDownloadLifetime
+	if v := vals["download-lifetime"]; v != "" {
+		secs, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("config: %s: download-lifetime %q: %w", path, v, err)
+		}
+		// Falsy (0, or negative -- shouldn't happen, but treat the same as
+		// 0 rather than producing a Config with a non-positive lifetime) is
+		// "absent", matching wsconfig.go's own handling of this key.
+		if secs > 0 {
+			cfg.DownloadLifetime = time.Duration(secs) * time.Second
+		}
 	}
 
 	return cfg, nil
