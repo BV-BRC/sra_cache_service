@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/BV-BRC/sra_cache_service/internal/config"
+	"github.com/BV-BRC/sra_cache_service/internal/jsonrpc"
 )
 
 // version is stamped at build time with -X main.version=... A future phase
@@ -103,8 +104,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mainMux := http.NewServeMux()
-	mainMux.HandleFunc("/ping", handlePing)
+	// TODO(Phase 3+ / after BV-BRC-Go-SDK p3auth PR merges): replace
+	// NoopValidator with a real p3auth.Validator once this module's go.mod
+	// replace directive points at a BV-BRC-Go-SDK checkout that has the
+	// promoted p3auth package on disk (today it points at
+	// ../BV-BRC-Go-SDK-sra-prereqs, a worktree on a branch that predates
+	// that promotion -- see go.mod's own comment). Until then every token
+	// is rejected, which still exercises AuthRequired's and AuthOptional's
+	// real gating logic correctly (see internal/jsonrpc/auth.go) -- only
+	// "a valid token was presented" is unreachable.
+	rpcServer := jsonrpc.NewServer(NoopValidator{}, log)
+
+	// No RPC methods registered yet -- Phase 4 adds SRACache.get_metadata;
+	// Phases 6/7 add start_precache / precache_status / get_sra_data.
 
 	// The data-plane listener serves nothing yet (Phase 7 adds
 	// /sra/{key}/{accession}.sra); it exists at this phase purely to prove
@@ -113,8 +125,13 @@ func main() {
 	dataMux := http.NewServeMux()
 
 	mainSrv := &http.Server{
-		Addr:              *listen,
-		Handler:           mainMux,
+		Addr: *listen,
+		// jsonrpc.Server serves /ping and /auth_ping itself (see
+		// internal/jsonrpc/ping.go) in addition to dispatching RPC calls,
+		// replacing Phase 1's ad-hoc mux+handlePing wiring. handlePing
+		// below is kept only so its pre-existing test keeps compiling and
+		// passing unchanged; it now just delegates to jsonrpc.Ping.
+		Handler:           rpcServer,
 		ReadHeaderTimeout: 20 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -176,16 +193,29 @@ func main() {
 	log.Info("stopped")
 }
 
+// handlePing is Phase 1's original /ping handler. Production traffic no
+// longer reaches it directly -- mainSrv.Handler is now the jsonrpc.Server
+// built in main, which serves /ping via jsonrpc.Ping -- but it's kept,
+// delegating to that same function, so main_test.go's pre-existing
+// TestHandlePing/TestHandlePingHead/TestHandlePingRejectsOtherMethods
+// keep compiling and passing unchanged.
 func handlePing(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodGet {
-		fmt.Fprint(w, "OK\n")
-	}
+	jsonrpc.Ping(w, r)
+}
+
+// NoopValidator is a placeholder jsonrpc.Validator used until the real
+// p3auth-backed one is available (see the TODO at rpcServer's
+// construction site in main, above). It rejects every token. That's
+// sufficient to exercise both AuthRequired's and AuthOptional's real code
+// paths -- a rejected token behaves, from the dispatcher's perspective,
+// exactly like an untrusted or expired caller's -- while being honest
+// that no real validation is wired up yet: nothing can ever successfully
+// authenticate against this server until it's replaced.
+type NoopValidator struct{}
+
+// Validate implements jsonrpc.Validator.
+func (NoopValidator) Validate(token string) (string, error) {
+	return "", errors.New("token validation not yet configured")
 }
 
 func sectionOrDefault(section string) string {
