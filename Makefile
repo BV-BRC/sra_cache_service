@@ -14,9 +14,38 @@ GOFLAGS ?=
 BIN_LOCAL = bin
 SERVER_BIN = $(BIN_LOCAL)/sra-cache-server
 
+# --- Deployment (Phase 3) config ---
+# Same TARGET/DEPLOY_TARGET/DEPLOY_RUNTIME convention as Workspace/Makefile:
+# TARGET is where we're installing to; DEPLOY_TARGET/DEPLOY_RUNTIME are what
+# gets baked *into* the rendered templates (kb_top/kb_runtime), which is
+# usually the same as TARGET/KB_RUNTIME but can be overridden separately for
+# a build that stages into one place but will run from another.
+TARGET ?= /kb/deployment
+DEPLOY_TARGET ?= $(TARGET)
+DEPLOY_RUNTIME ?= /kb/runtime
+
+ifdef DEPLOYMENT_VAR_DIR
+SERVICE_LOGDIR = $(DEPLOYMENT_VAR_DIR)/services/$(SERVICE)
+TPAGE_SERVICE_LOGDIR = --define kb_service_log_dir=$(SERVICE_LOGDIR)
+endif
+
+ifdef TEMPDIR
+TPAGE_TEMPDIR = --define kb_tempdir=$(TEMPDIR)
+endif
+
+TPAGE_DEPLOY_ARGS = \
+	--define kb_top=$(DEPLOY_TARGET) \
+	--define kb_runtime=$(DEPLOY_RUNTIME)
+
+TPAGE_ARGS = \
+	--define kb_service_name=$(SERVICE) \
+	--define kb_service_port=$(SERVICE_PORT) \
+	--define kb_data_service_port=$(DATA_SERVICE_PORT) \
+	$(TPAGE_TEMPDIR) \
+	$(TPAGE_SERVICE_LOGDIR)
+
 # Phase 1: build only the server binary and prove the JSONRPC client
-# generation path. Deployment (Phase 3) and the CLI tools (Phases 8/9) are
-# later phases -- the deploy-* targets below are intentionally stubs.
+# generation path. The CLI tools (Phases 8/9) are later phases.
 
 all: $(SERVER_BIN)
 
@@ -61,21 +90,41 @@ clean:
 
 # --- Deployment (Phase 3) ---
 # monit-based deploy of the static Go binary: service/start_service.tt,
-# service/stop_service.tt, service/process.$(SERVICE).tt, plus the
-# deploy/deploy-client/deploy-service/deploy-monit Makefile targets, follow
-# Workspace/Makefile's TPAGE_* pattern adapted from PSGI/starman to a single
-# static binary. Not built yet -- see
-# PLAN-sra-cache-service-implementation.md, Phase 3.
-deploy:
-	@echo "deploy: not implemented until Phase 3 -- see PLAN-sra-cache-service-implementation.md"
+# service/stop_service.tt, service/process.$(SERVICE).tt rendered via tpage,
+# following Workspace/Makefile's TPAGE_*/deploy-service/deploy-monit pattern
+# (adapted from PSGI/starman to a single static binary -- no wrap_*.sh
+# wrapper anywhere in this module's deploy path, unlike the Perl script
+# targets in tools/Makefile.common.rules: sra-cache-server and, later, the
+# CLI tools are self-contained static binaries that read
+# --config/$KB_DEPLOYMENT_CONFIG themselves).
+deploy: deploy-client deploy-service
 
+# No client CLI binaries exist yet -- p3-sra-precache and p3-sra-dump are
+# Phases 8-9 of PLAN-sra-cache-service-implementation.md. When they exist
+# this target's job is only `install` into $(TARGET)/bin (or wherever the
+# convention for a standalone Go CLI in this tree turns out to be) -- do NOT
+# add a wrap_*.sh step here: these are static binaries, not
+# scripts/*.pl|py|sh needing KB_TOP/PERL5LIB/etc injected around them.
 deploy-client:
-	@echo "deploy-client: not implemented until Phase 3 -- see PLAN-sra-cache-service-implementation.md"
+	@echo "deploy-client: no client CLI binaries exist yet (p3-sra-precache / p3-sra-dump are Phases 8-9 of PLAN-sra-cache-service-implementation.md) -- nothing to deploy"
 
-deploy-service:
-	@echo "deploy-service: not implemented until Phase 3 -- see PLAN-sra-cache-service-implementation.md"
+deploy-dir:
+	if [ ! -d $(TARGET)/services/$(SERVICE) ] ; then mkdir -p $(TARGET)/services/$(SERVICE) ; fi
+	if [ ! -d $(TARGET)/services/$(SERVICE)/bin ] ; then mkdir -p $(TARGET)/services/$(SERVICE)/bin ; fi
 
-deploy-monit:
-	@echo "deploy-monit: not implemented until Phase 3 -- see PLAN-sra-cache-service-implementation.md"
+deploy-service: deploy-dir deploy-monit
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=$(GOFLAGS) $(GO) build -buildvcs=false -o $(TARGET)/services/$(SERVICE)/bin/sra-cache-server ./cmd/sra-cache-server
+	$(TPAGE) $(TPAGE_DEPLOY_ARGS) $(TPAGE_ARGS) service/start_service.tt > $(TARGET)/services/$(SERVICE)/start_service
+	chmod +x $(TARGET)/services/$(SERVICE)/start_service
+	$(TPAGE) $(TPAGE_DEPLOY_ARGS) $(TPAGE_ARGS) service/stop_service.tt > $(TARGET)/services/$(SERVICE)/stop_service
+	chmod +x $(TARGET)/services/$(SERVICE)/stop_service
 
-.PHONY: all build test test-race vet compile-typespec clean deploy deploy-client deploy-service deploy-monit
+# deploy-monit depends on deploy-dir directly (Workspace/Makefile's
+# equivalent target doesn't, and so only works standalone if deploy-dir
+# already ran as a side effect of some earlier `make deploy`) so that
+# `make deploy-monit` alone against a brand new TARGET doesn't fail trying
+# to write into a services/$(SERVICE)/ directory that doesn't exist yet.
+deploy-monit: deploy-dir
+	$(TPAGE) $(TPAGE_DEPLOY_ARGS) $(TPAGE_ARGS) service/process.$(SERVICE).tt > $(TARGET)/services/$(SERVICE)/process.$(SERVICE)
+
+.PHONY: all build test test-race vet compile-typespec clean deploy deploy-client deploy-dir deploy-service deploy-monit

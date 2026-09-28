@@ -1,0 +1,93 @@
+#!/bin/bash
+#
+# Start the SRACache control-plane + data-plane server.
+#
+# Unlike the Perl/PSGI services this template is adapted from
+# (Workspace/service/start_service.tt), sra-cache-server is a single static
+# Go binary with no starman/plackup to daemonize for us. It backgrounds
+# itself here via setsid, and *it* writes its own pidfile (see
+# cmd/sra-cache-server/main.go's --pid-file handling) -- this script never
+# does `echo $! > $pid_file` -- so a crash-and-restart of the binary always
+# leaves a correct pidfile behind, and (once main.go grows the check --see
+# the TODO below) the binary itself can refuse to start a second copy.
+#
+export KB_TOP=[% kb_top %]
+export KB_RUNTIME=[% kb_runtime %]
+export KB_SERVICE_NAME="[% kb_service_name %]"
+[% IF kb_service_log_dir -%]
+export KB_SERVICE_LOG_DIR="[% kb_service_log_dir %]"
+if [ ! -d $KB_SERVICE_LOG_DIR ] ; then
+    mkdir -p $KB_SERVICE_LOG_DIR
+    if [ $? -ne 0 ] ; then
+	echo "Log directory $KB_SERVICE_LOG_DIR cannot be created" 1>&2
+	exit 1
+    fi
+fi
+[% ELSE -%]
+export KB_SERVICE_LOG_DIR="$KB_TOP/services/[% kb_service_name %]"
+[% END -%]
+export KB_DEPLOYMENT_CONFIG="$KB_TOP/deployment.cfg"
+
+[% IF kb_tempdir -%]
+export TMPDIR=[% kb_tempdir %]
+export TEMPDIR=[% kb_tempdir %]
+[% END -%]
+
+#
+# /vol/patric3/cli/ubuntu-runtime/bin is where `prefetch` actually lives on
+# this host -- it is not on PATH by default for a service account. This is a
+# forward-looking fallback: no phase before Phase 6 (the fetcher) execs
+# `prefetch` at all, but wiring the PATH now means Phase 6 doesn't also have
+# to touch this template. A `prefetch-bin` key in deploy.cfg's [[% kb_service_name %]]
+# section, once Phase 6 reads it, takes an absolute path and so wins over
+# anything PATH resolves regardless.
+export PATH=$KB_TOP/bin:$KB_RUNTIME/bin:$KB_TOP/services/[% kb_service_name %]/bin:/vol/patric3/cli/ubuntu-runtime/bin:$PATH
+
+pid_file=$KB_SERVICE_LOG_DIR/service.pid
+bin=$KB_TOP/services/[% kb_service_name %]/bin/sra-cache-server
+log_file=$KB_SERVICE_LOG_DIR/service.log
+
+if [ ! -x "$bin" ] ; then
+    echo "sra-cache-server binary not found or not executable at $bin" 1>&2
+    exit 1
+fi
+
+#
+# setsid detaches the server into its own session (so it survives this
+# script exiting / the parent shell going away) rather than relying on a
+# --daemonize flag the binary doesn't have. Both stdout and stderr go to
+# service.log; stdin is /dev/null so the backgrounded process never blocks
+# on or holds open this script's controlling terminal.
+#
+# Ports are read from [% kb_service_name %]'s deploy.cfg section by default,
+# but are passed explicitly here (like the Perl templates bake
+# --listen :[% kb_service_port %] into the starman command line) so the port
+# monit checks below are guaranteed to match what this binary actually
+# listens on even if deploy.cfg drifts.
+#
+setsid "$bin" \
+    --config "$KB_DEPLOYMENT_CONFIG" \
+    --section "$KB_SERVICE_NAME" \
+    --listen ":[% kb_service_port %]" \
+    --data-listen ":[% kb_data_service_port %]" \
+    --pid-file "$pid_file" \
+    >>"$log_file" 2>&1 </dev/null &
+
+#
+# The binary writes $pid_file itself once it has finished loading config and
+# is about to start listening (see main.go) -- poll briefly for that instead
+# of trusting $! (setsid's child, not the server, so $! is the wrong pid
+# anyway) or assuming success.
+tries=0
+max_tries=30
+while [ ! -s "$pid_file" ] && [ $tries -lt $max_tries ] ; do
+    sleep 0.2
+    tries=$((tries + 1))
+done
+
+if [ ! -s "$pid_file" ] ; then
+    echo "sra-cache-server did not write $pid_file within $((max_tries / 5)) seconds -- see $log_file" 1>&2
+    exit 1
+fi
+
+echo "sra-cache-server started, pid $(cat $pid_file)"

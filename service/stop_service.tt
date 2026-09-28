@@ -1,0 +1,62 @@
+#!/bin/bash
+#
+# Stop the SRACache server.
+#
+# Sends TERM, not QUIT -- see Workspace/service/stop_service.tt lines ~32-33
+# (its download.pid/completion.pid stanzas, both TERM) versus its line ~31
+# (service.pid, QUIT -- that one is starman-specific, telling starman's
+# manager process to finish in-flight requests then exit). sra-cache-server
+# is a plain Go binary; SIGQUIT to a Go process triggers the runtime's
+# default behavior of dumping every goroutine's stack and dying immediately,
+# which would abort any in-flight precache/download rather than let it
+# finish. cmd/sra-cache-server/main.go's signal.NotifyContext already
+# watches SIGTERM specifically and shuts both listeners down within 30s, so
+# TERM is both the safe and the correct signal here.
+#
+export KB_TOP=[% kb_top %]
+export KB_RUNTIME=[% kb_runtime %]
+export PATH=$KB_TOP/bin:$KB_RUNTIME/bin:$PATH
+[% IF kb_service_log_dir -%]
+export KB_SERVICE_LOG_DIR="[% kb_service_log_dir %]"
+[% ELSE -%]
+export KB_SERVICE_LOG_DIR="$KB_TOP/services/[% kb_service_name %]"
+[% END -%]
+
+function stop_service() {
+    signal=$1
+    pid_file=$2
+
+    if [ ! -f $pid_file ] ; then
+	echo "No pid file $pid_file found for service [% kb_service_name %] -- assuming it is already stopped" 1>&2
+	return 0
+    fi
+
+    pid=`cat $pid_file`
+
+    if [ -z "$pid" ] ; then
+	echo "Pid file $pid_file is empty -- removing it and assuming the service is already stopped" 1>&2
+	rm -f $pid_file
+	return 0
+    fi
+
+    if ! kill -0 $pid 2>/dev/null ; then
+	echo "Process $pid ($pid_file) is not running -- removing stale pid file" 1>&2
+	rm -f $pid_file
+	return 0
+    fi
+
+    kill -$signal $pid
+
+    while kill -0 $pid 2>/dev/null ; do
+	echo "Waiting for $pid to complete"
+	sleep 1
+    done
+
+    # The binary removes its own pid file on a clean shutdown (see
+    # cmd/sra-cache-server/main.go's `defer os.Remove(*pidFile)`); if it
+    # didn't get that far (e.g. it was killed with -9 out of band) clean up
+    # here so a subsequent start_service isn't confused by a stale file.
+    rm -f $pid_file
+}
+
+stop_service TERM $KB_SERVICE_LOG_DIR/service.pid
