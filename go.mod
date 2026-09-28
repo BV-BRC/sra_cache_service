@@ -21,8 +21,13 @@ require (
 	modernc.org/sqlite v1.45.0
 )
 
+// Phase 6: internal/config uses humanize.ParseBytes for max-cache-size.
+// Already a transitive dependency of modernc.org/sqlite (indirect below
+// would otherwise cover it), promoted to direct now that a package in this
+// module imports it itself.
+require github.com/dustin/go-humanize v1.0.1
+
 require (
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
