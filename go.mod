@@ -2,18 +2,20 @@ module github.com/BV-BRC/sra_cache_service
 
 go 1.24.0
 
-// TEMPORARY: BV-BRC-Go-SDK's sra-cache prerequisites (extended sra.Record /
-// LookupAll, promoted p3auth) live on an unmerged branch. Point at the local
-// worktree so development here isn't blocked on that PR landing. This
-// replace MUST be removed, and the require below pinned to a real released
-// SDK version, before any Phase 10 release build -- see
-// PLAN-sra-cache-service-implementation.md, "Cross-cutting conventions".
-replace github.com/BV-BRC/BV-BRC-Go-SDK => ../BV-BRC-Go-SDK-sra-prereqs
-
 require (
-	// Imported by internal/metadata (Phase 4), via the BV-BRC-Go-SDK/sra
-	// package -- see the replace comment above.
-	github.com/BV-BRC/BV-BRC-Go-SDK v0.0.0-20260902193530-3defe848dae6
+	// Imported for sra (internal/metadata), auth and version (the two CLIs,
+	// internal/dumper, internal/rpcclient). Not yet for p3auth -- that is
+	// what the NoopValidator TODO in cmd/sra-cache-server/main.go is about;
+	// the package is available here, just not wired up.
+	//
+	// This was a local-path replace against a worktree until 2026-10-20,
+	// because the two prerequisite branches were unmerged and because no
+	// release tag could be resolved from Go at all: the module was declared
+	// without a /v2 suffix while every tag was v2.x, so the proxy rejected
+	// them. Both are fixed -- the prerequisites merged (BV-BRC-Go-SDK#18,
+	// #19) and the module was renamed (#17) -- so this is now an ordinary
+	// pin to the first release that can be named.
+	github.com/BV-BRC/BV-BRC-Go-SDK/v2 v2.0.17
 	github.com/spf13/pflag v1.0.9
 	// Not yet imported by any package -- Phase 5's internal/catalog is the
 	// first real user. Pulled in now so go.sum is settled ahead of that

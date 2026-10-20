@@ -21,7 +21,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/BV-BRC/BV-BRC-Go-SDK/version"
+	"github.com/BV-BRC/BV-BRC-Go-SDK/v2/version"
 )
 
 // Client is a JSONRPC 1.1 client for one service base URL. The zero value

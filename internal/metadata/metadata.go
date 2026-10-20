@@ -10,7 +10,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/BV-BRC/BV-BRC-Go-SDK/sra"
+	"github.com/BV-BRC/BV-BRC-Go-SDK/v2/sra"
 )
 
 // SRAMetadata is one output row. Field names and JSON tags match

@@ -26,7 +26,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/BV-BRC/BV-BRC-Go-SDK/sra"
+	"github.com/BV-BRC/BV-BRC-Go-SDK/v2/sra"
 	"github.com/BV-BRC/sra_cache_service/internal/cache"
 	"github.com/BV-BRC/sra_cache_service/internal/catalog"
 	"github.com/BV-BRC/sra_cache_service/internal/config"
@@ -113,15 +113,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// TODO(Phase 3+ / after BV-BRC-Go-SDK p3auth PR merges): replace
-	// NoopValidator with a real p3auth.Validator once this module's go.mod
-	// replace directive points at a BV-BRC-Go-SDK checkout that has the
-	// promoted p3auth package on disk (today it points at
-	// ../BV-BRC-Go-SDK-sra-prereqs, a worktree on a branch that predates
-	// that promotion -- see go.mod's own comment). Until then every token
-	// is rejected, which still exercises AuthRequired's and AuthOptional's
-	// real gating logic correctly (see internal/jsonrpc/auth.go) -- only
-	// "a valid token was presented" is unreachable.
+	// TODO(Phase 10): replace NoopValidator with a real p3auth.Validator.
+	//
+	// This was blocked on the promoted p3auth package being unavailable --
+	// it was internal/ in Workspace, then on an unmerged branch. It is
+	// neither now: BV-BRC-Go-SDK/v2/p3auth is public and released, and this
+	// module pins it. What remains is the wiring plus verification against
+	// a real token, which is Phase 10 work and wants a live service.
+	//
+	// Until then every token is rejected. That still exercises
+	// AuthRequired's and AuthOptional's real gating logic (see
+	// internal/jsonrpc/auth.go) -- only "a valid token was presented" is
+	// unreachable, so start_precache cannot succeed against an instance
+	// built from this commit, with any token.
 	rpcServer := jsonrpc.NewServer(NoopValidator{}, log)
 
 	// Phase 5/6: catalog (sqlite) + on-disk cache + fetcher/pool. Both

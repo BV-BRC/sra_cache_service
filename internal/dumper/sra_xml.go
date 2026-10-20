@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/BV-BRC/BV-BRC-Go-SDK/version"
+	"github.com/BV-BRC/BV-BRC-Go-SDK/v2/version"
 )
 
 // eutilsEfetchURL is the same endpoint sra_import/lib/sra_tools.py's

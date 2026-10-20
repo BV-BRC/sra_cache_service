@@ -30,8 +30,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	sdkauth "github.com/BV-BRC/BV-BRC-Go-SDK/auth"
-	"github.com/BV-BRC/BV-BRC-Go-SDK/version"
+	sdkauth "github.com/BV-BRC/BV-BRC-Go-SDK/v2/auth"
+	"github.com/BV-BRC/BV-BRC-Go-SDK/v2/version"
 	"github.com/BV-BRC/sra_cache_service/internal/dumper"
 	"github.com/BV-BRC/sra_cache_service/internal/metadata"
 	"github.com/BV-BRC/sra_cache_service/internal/rpcclient"

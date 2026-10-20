@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BV-BRC/BV-BRC-Go-SDK/sra"
+	"github.com/BV-BRC/BV-BRC-Go-SDK/v2/sra"
 )
 
 // TestAcceptanceAgainstRealP3Sra is the "real acceptance test" called out in

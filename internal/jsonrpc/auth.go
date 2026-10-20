@@ -12,9 +12,10 @@ import (
 // returns the authenticated user id.
 //
 // Deliberately just this interface, with no dependency on any concrete
-// implementation: the real p3auth-backed validator lives on an unmerged
-// BV-BRC-Go-SDK branch (see cmd/sra-cache-server/main.go's construction
-// site), so this package only depends on the shape it needs.
+// implementation, so this package depends only on the shape it needs and
+// every test can supply its own. The real implementation is
+// BV-BRC-Go-SDK/v2/p3auth; see cmd/sra-cache-server/main.go's construction
+// site for why it is not wired up yet.
 type Validator interface {
 	Validate(token string) (userID string, err error)
 }
